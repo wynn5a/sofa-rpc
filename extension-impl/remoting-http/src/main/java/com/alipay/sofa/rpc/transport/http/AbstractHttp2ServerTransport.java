@@ -17,6 +17,7 @@
 package com.alipay.sofa.rpc.transport.http;
 
 import com.alipay.sofa.rpc.core.exception.SofaRpcRuntimeException;
+import com.alipay.sofa.rpc.log.LogCodes;
 import com.alipay.sofa.rpc.log.Logger;
 import com.alipay.sofa.rpc.log.LoggerFactory;
 import com.alipay.sofa.rpc.server.http.HttpServerHandler;
@@ -62,12 +63,12 @@ public abstract class AbstractHttp2ServerTransport extends ServerTransport {
     /**
      * ServerBootstrap
      */
-    private ServerBootstrap serverBootstrap;
+    private volatile ServerBootstrap serverBootstrap;
 
     /**
      * 业务线程池
      */
-    private EventLoopGroup  bizGroup;
+    private EventLoopGroup           bizGroup;
 
     @Override
     public boolean start() {
@@ -118,8 +119,8 @@ public abstract class AbstractHttp2ServerTransport extends ServerTransport {
                                 transportConfig.getHost(), transportConfig.getPort());
                         }
                     } else {
-                        LOGGER.error("HTTP/2 Server bind to {}:{} failed!",
-                            transportConfig.getHost(), transportConfig.getPort());
+                        LOGGER.error(LogCodes.getLog(LogCodes.ERROR_HTTP2_BIND, transportConfig.getHost(),
+                            transportConfig.getPort()));
                         stop();
                     }
                 }
@@ -130,7 +131,8 @@ public abstract class AbstractHttp2ServerTransport extends ServerTransport {
                 if (channelFuture.isSuccess()) {
                     flag = Boolean.TRUE;
                 } else {
-                    throw new SofaRpcRuntimeException("Server start fail!", future.cause());
+                    throw new SofaRpcRuntimeException(LogCodes.getLog(LogCodes.ERROR_START_SERVER, "HTTP/2"),
+                        future.cause());
                 }
             } catch (InterruptedException e) {
                 LOGGER.error(e.getMessage(), e);

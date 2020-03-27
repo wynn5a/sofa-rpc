@@ -39,6 +39,7 @@ import com.alipay.sofa.rpc.log.LogCodes;
 import com.alipay.sofa.rpc.log.Logger;
 import com.alipay.sofa.rpc.log.LoggerFactory;
 import com.alipay.sofa.rpc.registry.Registry;
+import com.alipay.sofa.rpc.registry.utils.RegistryUtils;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -53,25 +54,32 @@ import static com.alipay.sofa.rpc.common.utils.StringUtils.CONTEXT_SEP;
  * <p>Simple Nacos registry. Features: <br/>
  * 1. register publisher as instance to nacos server.
  * 2. subscribe instances change event
- * 
+ *
  * <pre>
  *     Structure of nacos storage:
  *     --sofa-rpc (namespace)
- *        |--com.alipay.sofa.rpc.example.HelloService (serviceName)
+ *        |--com.alipay.sofa.rpc.example.HelloService (serviceName):v1.1 (uniqueId):DEFAULT (protocol)
  *        |   |--default-cluster (cluster)
  *        |   |   |--instances
  *        |   |   |   |--{"ip": "192.168.1.100", "port": 22000, "metaData": {"protocol": "bolt", "timeout": "1000", ...}}
  *        |   |   |   |--{"ip": "192.168.1.110", "port": 22000, "metaData": {"protocol": "bolt", "timeout": "1000", ...}}
- *        |--com.alipay.sofa.rpc.example.EchoService (next serviceName)
+ *        |--com.alipay.sofa.rpc.example.EchoService (next serviceName):grpc (protocol)
  *        |......
  * </pre>
- * 
+ *
+ *  Remark:
+ *  Here we register service name with not only serviceName, but also with 'uniqueId' and 'protocol',
+ *  because in Nacos, all service instances(with same service name) are only identified by ip and port,
+ *  if there are two service with same service name but different uniqueId, there will be only one instance remained in instance list,
+ *  and the consumer can't find the other instance from Nacos
  * </p>
- * 
+ *
  * @author <a href=mailto:jervyshi@gmail.com>JervyShi</a>
  */
 @Extension("nacos")
 public class NacosRegistry extends Registry {
+
+    public static final String                            EXT_NAME          = "NacosRegistry";
 
     /**
      * slf4j Logger for this class
@@ -91,6 +99,8 @@ public class NacosRegistry extends Registry {
 
     private ConcurrentMap<ConsumerConfig, EventListener>  consumerListeners = new ConcurrentHashMap<ConsumerConfig, EventListener>();
 
+    private Properties                                    nacosConfig       = new Properties();
+
     /**
      * Instantiates a new Nacos registry.
      *
@@ -108,14 +118,18 @@ public class NacosRegistry extends Registry {
 
         String addressInput = registryConfig.getAddress(); // xxx:8848,yyy:8848/namespace
         if (StringUtils.isEmpty(addressInput)) {
-            throw new SofaRpcRuntimeException("Address of nacos registry is empty.");
+            throw new SofaRpcRuntimeException(LogCodes.getLog(LogCodes.ERROR_EMPTY_ADDRESS, EXT_NAME));
         }
         int idx = addressInput.indexOf(CONTEXT_SEP);
         String namespace;
         String address; // IP地址
         if (idx > 0) {
             address = addressInput.substring(0, idx);
-            namespace = addressInput.substring(idx);
+            namespace = addressInput.substring(idx + 1);
+            //for host:port/ this scene
+            if (StringUtils.isBlank(namespace)) {
+                namespace = DEFAULT_NAMESPACE;
+            }
         } else {
             address = addressInput;
             namespace = DEFAULT_NAMESPACE;
@@ -123,14 +137,13 @@ public class NacosRegistry extends Registry {
 
         defaultCluster = Collections.singletonList(NacosRegistryHelper.DEFAULT_CLUSTER);
 
-        Properties nacosConfig = new Properties();
         nacosConfig.put(PropertyKeyConst.SERVER_ADDR, address);
         nacosConfig.put(PropertyKeyConst.NAMESPACE, namespace);
 
         try {
             namingService = NamingFactory.createNamingService(nacosConfig);
         } catch (NacosException e) {
-            throw new SofaRpcRuntimeException("Init nacos naming service error, address: " + address);
+            throw new SofaRpcRuntimeException(LogCodes.getLog(LogCodes.ERROR_INIT_NACOS_NAMING_SERVICE, address), e);
         }
     }
 
@@ -160,25 +173,25 @@ public class NacosRegistry extends Registry {
             try {
                 List<Instance> instances = NacosRegistryHelper.convertProviderToInstances(config);
                 if (CommonUtils.isNotEmpty(instances)) {
-                    String serviceName = config.getInterfaceId();
-
-                    if (LOGGER.isInfoEnabled(appName)) {
-                        LOGGER.infoWithApp(appName,
-                            LogCodes.getLog(LogCodes.INFO_ROUTE_REGISTRY_PUB_START, serviceName));
-                    }
-
                     for (Instance instance : instances) {
+                        String serviceName = instance.getServiceName();
+                        if (LOGGER.isInfoEnabled(appName)) {
+                            LOGGER.infoWithApp(appName,
+                                LogCodes.getLog(LogCodes.INFO_ROUTE_REGISTRY_PUB_START, serviceName));
+                        }
                         namingService.registerInstance(serviceName, instance);
+                        if (LOGGER.isInfoEnabled(appName)) {
+                            LOGGER.infoWithApp(appName,
+                                LogCodes.getLog(LogCodes.INFO_ROUTE_REGISTRY_PUB_OVER, serviceName));
+                        }
                     }
                     providerInstances.put(config, instances);
-
-                    if (LOGGER.isInfoEnabled(appName)) {
-                        LOGGER.infoWithApp(appName,
-                            LogCodes.getLog(LogCodes.INFO_ROUTE_REGISTRY_PUB_OVER, serviceName));
-                    }
                 }
+            } catch (SofaRpcRuntimeException e) {
+                throw e;
             } catch (Exception e) {
-                throw new SofaRpcRuntimeException("Failed to register provider to nacosRegistry!", e);
+                throw new SofaRpcRuntimeException(LogCodes.getLog(LogCodes.ERROR_REG_PROVIDER, "NacosRegistry",
+                    config.buildKey()), e);
             }
         }
     }
@@ -196,24 +209,27 @@ public class NacosRegistry extends Registry {
 
         // unregister publisher
         if (config.isRegister()) {
-            String serviceName = config.getInterfaceId();
             try {
                 List<Instance> instances = providerInstances.remove(config);
                 if (CommonUtils.isNotEmpty(instances)) {
                     for (Instance instance : instances) {
+                        String serviceName = instance.getServiceName();
                         namingService.deregisterInstance(serviceName, instance.getIp(), instance.getPort(),
                             instance.getClusterName());
-                    }
-                    if (LOGGER.isInfoEnabled(appName)) {
-                        LOGGER.infoWithApp(appName, LogCodes.getLog(LogCodes.INFO_ROUTE_REGISTRY_UNPUB,
-                            serviceName, instances.size()));
+                        if (LOGGER.isInfoEnabled(appName)) {
+                            LOGGER.infoWithApp(appName, LogCodes.getLog(LogCodes.INFO_ROUTE_REGISTRY_UNPUB,
+                                serviceName, instances.size()));
+                        }
                     }
                 }
 
             } catch (Exception e) {
                 if (!RpcRunningState.isShuttingDown()) {
-                    throw new SofaRpcRuntimeException(
-                        "Failed to unregister provider to nacos registry! service: " + serviceName, e);
+                    if (e instanceof SofaRpcRuntimeException) {
+                        throw (SofaRpcRuntimeException) e;
+                    } else {
+                        throw new SofaRpcRuntimeException(LogCodes.getLog(LogCodes.ERROR_UNREG_PROVIDER, EXT_NAME), e);
+                    }
                 }
             }
         }
@@ -244,7 +260,7 @@ public class NacosRegistry extends Registry {
         }
 
         if (config.isSubscribe()) {
-            String serviceName = config.getInterfaceId();
+            String serviceName = NacosRegistryHelper.buildServiceName(config, config.getProtocol());
 
             if (LOGGER.isInfoEnabled()) {
                 LOGGER.infoWithApp(appName, LogCodes.getLog(LogCodes.INFO_ROUTE_REGISTRY_SUB, serviceName));
@@ -278,11 +294,12 @@ public class NacosRegistry extends Registry {
                 List<Instance> allInstances = namingService.getAllInstances(serviceName, defaultCluster);
 
                 List<ProviderInfo> providerInfos = NacosRegistryHelper.convertInstancesToProviders(allInstances);
-                List<ProviderInfo> matchProviders = NacosRegistryHelper.matchProviderInfos(config, providerInfos);
+                List<ProviderInfo> matchProviders = RegistryUtils.matchProviderInfos(config, providerInfos);
                 return Collections.singletonList(new ProviderGroup().addAll(matchProviders));
+            } catch (SofaRpcRuntimeException e) {
+                throw e;
             } catch (Exception e) {
-                throw new SofaRpcRuntimeException(
-                    "Failed to subscribe provider from nacosRegistry, service: " + serviceName, e);
+                throw new SofaRpcRuntimeException(LogCodes.getLog(LogCodes.ERROR_SUB_PROVIDER, EXT_NAME), e);
             }
 
         }
@@ -293,7 +310,7 @@ public class NacosRegistry extends Registry {
     @Override
     public void unSubscribe(ConsumerConfig config) {
         if (config.isSubscribe()) {
-            String serviceName = config.getInterfaceId();
+            String serviceName = NacosRegistryHelper.buildServiceName(config, config.getProtocol());
             try {
                 EventListener eventListener = consumerListeners.remove(config);
                 if (null != eventListener) {
@@ -301,8 +318,12 @@ public class NacosRegistry extends Registry {
                 }
             } catch (Exception e) {
                 if (!RpcRunningState.isShuttingDown()) {
-                    throw new SofaRpcRuntimeException(
-                        "Failed to unsubscribe listener from nacosRegistry, service:" + serviceName, e);
+
+                    if (e instanceof SofaRpcRuntimeException) {
+                        throw (SofaRpcRuntimeException) e;
+                    } else {
+                        throw new SofaRpcRuntimeException(LogCodes.getLog(LogCodes.ERROR_UNSUB_LISTENER, EXT_NAME), e);
+                    }
                 }
             }
 
@@ -327,5 +348,9 @@ public class NacosRegistry extends Registry {
         }
         namingService = null;
         providerObserver = null;
+    }
+
+    public Properties getNacosConfig() {
+        return nacosConfig;
     }
 }

@@ -78,13 +78,14 @@ public class NacosRegistryProviderObserver {
     void updateProviders(ConsumerConfig config, List<Instance> instances) {
         if (LOGGER.isInfoEnabled(config.getAppName())) {
             LOGGER.infoWithApp(config.getAppName(),
-                "Receive update provider: serviceName={}, size={}, data={}", config.getInterfaceId(), instances.size(),
+                "Receive update provider: serviceName={}, size={}, data={}",
+                NacosRegistryHelper.buildServiceName(config, config.getProtocol()), instances.size(),
                 instances);
         }
         List<ProviderInfoListener> providerInfoListeners = providerListenerMap.get(config);
         if (CommonUtils.isNotEmpty(providerInfoListeners)) {
             List<ProviderInfo> providerInfos = NacosRegistryHelper.convertInstancesToProviders(instances);
-            List<ProviderInfo> matchProviders = NacosRegistryHelper.matchProviderInfos(config, providerInfos);
+            List<ProviderInfo> matchProviders = RegistryUtils.matchProviderInfos(config, providerInfos);
 
             for (ProviderInfoListener providerInfoListener : providerInfoListeners) {
                 providerInfoListener

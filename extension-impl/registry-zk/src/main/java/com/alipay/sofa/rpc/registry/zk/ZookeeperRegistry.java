@@ -37,8 +37,10 @@ import com.alipay.sofa.rpc.log.Logger;
 import com.alipay.sofa.rpc.log.LoggerFactory;
 import com.alipay.sofa.rpc.registry.Registry;
 import org.apache.curator.RetryPolicy;
+import org.apache.curator.framework.AuthInfo;
 import org.apache.curator.framework.CuratorFramework;
 import org.apache.curator.framework.CuratorFrameworkFactory;
+import org.apache.curator.framework.api.ACLProvider;
 import org.apache.curator.framework.imps.CuratorFrameworkState;
 import org.apache.curator.framework.recipes.cache.PathChildrenCache;
 import org.apache.curator.framework.recipes.cache.PathChildrenCacheEvent;
@@ -48,8 +50,11 @@ import org.apache.curator.framework.state.ConnectionStateListener;
 import org.apache.curator.retry.ExponentialBackoffRetry;
 import org.apache.zookeeper.CreateMode;
 import org.apache.zookeeper.KeeperException;
+import org.apache.zookeeper.ZooDefs;
+import org.apache.zookeeper.data.ACL;
 
 import java.net.URLEncoder;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -96,10 +101,12 @@ import static com.alipay.sofa.rpc.registry.zk.ZookeeperRegistryHelper.buildProvi
 @Extension("zookeeper")
 public class ZookeeperRegistry extends Registry {
 
+    public static final String  EXT_NAME = "ZookeeperRegistry";
+
     /**
      * slf4j Logger for this class
      */
-    private final static Logger LOGGER = LoggerFactory.getLogger(ZookeeperRegistry.class);
+    private final static Logger LOGGER   = LoggerFactory.getLogger(ZookeeperRegistry.class);
 
     /**
      * 注册中心配置
@@ -190,7 +197,7 @@ public class ZookeeperRegistry extends Registry {
         }
         String addressInput = registryConfig.getAddress(); // xxx:2181,yyy:2181/path1/paht2
         if (StringUtils.isEmpty(addressInput)) {
-            throw new SofaRpcRuntimeException("Address of zookeeper registry is empty.");
+            throw new SofaRpcRuntimeException(LogCodes.getLog(LogCodes.ERROR_EMPTY_ADDRESS, EXT_NAME));
         }
         int idx = addressInput.indexOf(CONTEXT_SEP);
         String address; // IP地址
@@ -212,14 +219,22 @@ public class ZookeeperRegistry extends Registry {
                 address, rootPath, preferLocalFile, ephemeralNode);
         }
         RetryPolicy retryPolicy = new ExponentialBackoffRetry(1000, 3);
-        zkClient = CuratorFrameworkFactory.builder()
+        CuratorFrameworkFactory.Builder zkClientuilder = CuratorFrameworkFactory.builder()
             .connectString(address)
             .sessionTimeoutMs(registryConfig.getConnectTimeout() * 3)
             .connectionTimeoutMs(registryConfig.getConnectTimeout())
             .canBeReadOnly(false)
             .retryPolicy(retryPolicy)
-            .defaultData(null)
-            .build();
+            .defaultData(null);
+
+        //是否需要添加zk的认证信息
+        List<AuthInfo> authInfos = buildAuthInfo();
+        if (CommonUtils.isNotEmpty(authInfos)) {
+            zkClientuilder = zkClientuilder.aclProvider(getDefaultAclProvider())
+                .authorization(authInfos);
+        }
+
+        zkClient = zkClientuilder.build();
 
         zkClient.getConnectionStateListenable().addListener(new ConnectionStateListener() {
             @Override
@@ -261,7 +276,7 @@ public class ZookeeperRegistry extends Registry {
         try {
             zkClient.start();
         } catch (Exception e) {
-            throw new SofaRpcRuntimeException("Failed to start zookeeper zkClient", e);
+            throw new SofaRpcRuntimeException(LogCodes.getLog(LogCodes.ERROR_ZOOKEEPER_CLIENT_START), e);
         }
         return zkClient.getState() == CuratorFrameworkState.STARTED;
     }
@@ -377,10 +392,12 @@ public class ZookeeperRegistry extends Registry {
                 }
 
             }
+        } catch (SofaRpcRuntimeException e) {
+            throw e;
         } catch (Exception e) {
-            throw new SofaRpcRuntimeException("Failed to register provider to zookeeperRegistry!", e);
+            throw new SofaRpcRuntimeException(LogCodes.getLog(LogCodes.ERROR_REG_PROVIDER, "zookeeperRegistry",
+                config.buildKey()), e);
         }
-
         if (EventBus.isEnable(ProviderPubEvent.class)) {
             ProviderPubEvent event = new ProviderPubEvent(config);
             EventBus.post(event);
@@ -427,7 +444,7 @@ public class ZookeeperRegistry extends Registry {
             INTERFACE_CONFIG_CACHE.put(configPath, pathChildrenCache);
             configObserver.updateConfigAll(config, configPath, pathChildrenCache.getCurrentData());
         } catch (Exception e) {
-            throw new SofaRpcRuntimeException("Failed to subscribe provider config from zookeeperRegistry!", e);
+            throw new SofaRpcRuntimeException(LogCodes.getLog(LogCodes.ERROR_SUB_PROVIDER_CONFIG, EXT_NAME), e);
         }
     }
 
@@ -472,7 +489,7 @@ public class ZookeeperRegistry extends Registry {
             INTERFACE_OVERRIDE_CACHE.put(overridePath, pathChildrenCache);
             overrideObserver.updateConfigAll(config, overridePath, pathChildrenCache.getCurrentData());
         } catch (Exception e) {
-            throw new SofaRpcRuntimeException("Failed to subscribe provider config from zookeeperRegistry!", e);
+            throw new SofaRpcRuntimeException(LogCodes.getLog(LogCodes.ERROR_SUB_PROVIDER_OVERRIDE, EXT_NAME), e);
         }
     }
 
@@ -503,7 +520,7 @@ public class ZookeeperRegistry extends Registry {
                 }
             } catch (Exception e) {
                 if (!RpcRunningState.isShuttingDown()) {
-                    throw new SofaRpcRuntimeException("Failed to unregister provider to zookeeperRegistry!", e);
+                    throw new SofaRpcRuntimeException(LogCodes.getLog(LogCodes.ERROR_UNREG_PROVIDER, EXT_NAME), e);
                 }
             }
         }
@@ -518,7 +535,7 @@ public class ZookeeperRegistry extends Registry {
                 }
             } catch (Exception e) {
                 if (!RpcRunningState.isShuttingDown()) {
-                    throw new SofaRpcRuntimeException("Failed to unsubscribe provider config from zookeeperRegistry!",
+                    throw new SofaRpcRuntimeException(LogCodes.getLog(LogCodes.ERROR_UNSUB_PROVIDER_CONFIG, EXT_NAME),
                         e);
                 }
             }
@@ -609,7 +626,7 @@ public class ZookeeperRegistry extends Registry {
                     providerPath, pathChildrenCache.getCurrentData());
                 matchProviders = ZookeeperRegistryHelper.matchProviderInfos(config, providerInfos);
             } catch (Exception e) {
-                throw new SofaRpcRuntimeException("Failed to subscribe provider from zookeeperRegistry!", e);
+                throw new SofaRpcRuntimeException(LogCodes.getLog(LogCodes.ERROR_SUB_PROVIDER, EXT_NAME), e);
             }
 
             if (EventBus.isEnable(ConsumerSubEvent.class)) {
@@ -648,8 +665,10 @@ public class ZookeeperRegistry extends Registry {
                 if (LOGGER.isWarnEnabled()) {
                     LOGGER.warn("consumer has exists in zookeeper, consumer=" + url);
                 }
+            } catch (SofaRpcRuntimeException e) {
+                throw e;
             } catch (Exception e) {
-                throw new SofaRpcRuntimeException("Failed to register consumer to zookeeperRegistry!", e);
+                throw new SofaRpcRuntimeException(LogCodes.getLog(LogCodes.ERROR_REG_CONSUMER_CONFIG, EXT_NAME), e);
             }
         }
     }
@@ -667,7 +686,8 @@ public class ZookeeperRegistry extends Registry {
                 }
             } catch (Exception e) {
                 if (!RpcRunningState.isShuttingDown()) {
-                    throw new SofaRpcRuntimeException("Failed to unregister consumer to zookeeperRegistry!", e);
+                    throw new SofaRpcRuntimeException(LogCodes.getLog(LogCodes.ERROR_UNREG_CONSUMER_CONFIG, EXT_NAME),
+                        e);
                 }
             }
         }
@@ -677,14 +697,15 @@ public class ZookeeperRegistry extends Registry {
                 providerObserver.removeProviderListener(config);
             } catch (Exception e) {
                 if (!RpcRunningState.isShuttingDown()) {
-                    throw new SofaRpcRuntimeException("Failed to unsubscribe provider from zookeeperRegistry!", e);
+                    throw new SofaRpcRuntimeException(LogCodes.getLog(LogCodes.ERROR_UNSUB_PROVIDER_CONFIG, EXT_NAME),
+                        e);
                 }
             }
             try {
                 configObserver.removeConfigListener(config);
             } catch (Exception e) {
                 if (!RpcRunningState.isShuttingDown()) {
-                    throw new SofaRpcRuntimeException("Failed to unsubscribe consumer config from zookeeperRegistry!",
+                    throw new SofaRpcRuntimeException(LogCodes.getLog(LogCodes.ERROR_UNSUB_CONSUMER_CONFIG, EXT_NAME),
                         e);
                 }
             }
@@ -694,8 +715,8 @@ public class ZookeeperRegistry extends Registry {
                     childrenCache.close();
                 } catch (Exception e) {
                     if (!RpcRunningState.isShuttingDown()) {
-                        throw new SofaRpcRuntimeException(
-                            "Failed to unsubscribe consumer config from zookeeperRegistry!", e);
+                        throw new SofaRpcRuntimeException(LogCodes.getLog(LogCodes.ERROR_UNSUB_CONSUMER_CONFIG,
+                            EXT_NAME), e);
                     }
                 }
             }
@@ -716,7 +737,7 @@ public class ZookeeperRegistry extends Registry {
 
     private CuratorFramework getAndCheckZkClient() {
         if (zkClient == null || zkClient.getState() != CuratorFrameworkState.STARTED) {
-            throw new SofaRpcRuntimeException("Zookeeper client is not available");
+            throw new SofaRpcRuntimeException(LogCodes.getLog(LogCodes.ERROR_ZOOKEEPER_CLIENT_UNAVAILABLE));
         }
         return zkClient;
     }
@@ -743,8 +764,48 @@ public class ZookeeperRegistry extends Registry {
             try {
                 entry.getValue().close();
             } catch (Exception e) {
-                LOGGER.error("Close PathChildrenCache error!", e);
+                LOGGER.error(LogCodes.getLog(LogCodes.ERROR_CLOSE_PATH_CACHE), e);
             }
         }
+    }
+
+    /**
+     * 获取默认的AclProvider
+     * @return
+     */
+    private ACLProvider getDefaultAclProvider() {
+        return new ACLProvider() {
+            @Override
+            public List<ACL> getDefaultAcl() {
+                return ZooDefs.Ids.CREATOR_ALL_ACL;
+            }
+
+            @Override
+            public List<ACL> getAclForPath(String path) {
+                return ZooDefs.Ids.CREATOR_ALL_ACL;
+            }
+        };
+    }
+
+    /**
+     * 创建认证信息
+     * @return
+     */
+    private List<AuthInfo> buildAuthInfo() {
+        List<AuthInfo> info = new ArrayList<AuthInfo>();
+
+        String scheme = registryConfig.getParameter("scheme");
+
+        //如果存在多个认证信息，则在参数形式为为addAuth=user1:paasswd1,user2:passwd2
+        String addAuth = registryConfig.getParameter("addAuth");
+
+        if (StringUtils.isNotEmpty(addAuth)) {
+            String[] addAuths = addAuth.split(",");
+            for (String singleAuthInfo : addAuths) {
+                info.add(new AuthInfo(scheme, singleAuthInfo.getBytes()));
+            }
+        }
+
+        return info;
     }
 }

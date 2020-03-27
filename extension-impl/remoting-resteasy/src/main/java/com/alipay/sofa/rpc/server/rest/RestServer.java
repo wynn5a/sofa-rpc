@@ -16,20 +16,26 @@
  */
 package com.alipay.sofa.rpc.server.rest;
 
+import com.alipay.sofa.rpc.common.RpcConstants;
 import com.alipay.sofa.rpc.common.utils.CommonUtils;
+import com.alipay.sofa.rpc.common.utils.StringUtils;
 import com.alipay.sofa.rpc.config.JAXRSProviderManager;
 import com.alipay.sofa.rpc.config.ProviderConfig;
 import com.alipay.sofa.rpc.config.ServerConfig;
 import com.alipay.sofa.rpc.core.exception.SofaRpcRuntimeException;
 import com.alipay.sofa.rpc.ext.Extension;
 import com.alipay.sofa.rpc.invoke.Invoker;
+import com.alipay.sofa.rpc.log.LogCodes;
 import com.alipay.sofa.rpc.log.Logger;
 import com.alipay.sofa.rpc.log.LoggerFactory;
+import com.alipay.sofa.rpc.proxy.ProxyFactory;
 import com.alipay.sofa.rpc.server.Server;
+import org.jboss.resteasy.plugins.interceptors.CorsFilter;
 import org.jboss.resteasy.spi.PropertyInjector;
 import org.jboss.resteasy.spi.ResteasyDeployment;
 import org.jboss.resteasy.spi.ResteasyProviderFactory;
 
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -72,7 +78,7 @@ public class RestServer implements Server {
         httpServer = buildServer();
     }
 
-    private SofaNettyJaxrsServer buildServer() {
+    protected SofaNettyJaxrsServer buildServer() {
         // 生成Server对象
         SofaNettyJaxrsServer httpServer = new SofaNettyJaxrsServer(serverConfig);
 
@@ -94,7 +100,7 @@ public class RestServer implements Server {
         return httpServer;
     }
 
-    private void registerProvider(ResteasyProviderFactory providerFactory) {
+    protected void registerProvider(ResteasyProviderFactory providerFactory) {
         // 注册内置
         Set<Class> internalProviderClasses = JAXRSProviderManager.getInternalProviderClasses();
         if (CommonUtils.isNotEmpty(internalProviderClasses)) {
@@ -102,6 +108,21 @@ public class RestServer implements Server {
                 providerFactory.register(providerClass);
             }
         }
+
+        // 注册cors filter
+        Map<String, String> parameters = serverConfig.getParameters();
+        if (CommonUtils.isNotEmpty(parameters)) {
+            String crossDomainStr = parameters.get(RpcConstants.ALLOWED_ORIGINS);
+            if (StringUtils.isNotBlank(crossDomainStr)) {
+                final CorsFilter corsFilter = new CorsFilter();
+                String[] domains = StringUtils.splitWithCommaOrSemicolon(crossDomainStr);
+                for (String allowDomain : domains) {
+                    corsFilter.getAllowedOrigins().add(allowDomain);
+                }
+                JAXRSProviderManager.registerCustomProviderInstance(corsFilter);
+            }
+        }
+
         // 注册自定义
         Set<Object> customProviderInstances = JAXRSProviderManager.getCustomProviderInstances();
         if (CommonUtils.isNotEmpty(customProviderInstances)) {
@@ -141,9 +162,11 @@ public class RestServer implements Server {
                 if (LOGGER.isInfoEnabled()) {
                     LOGGER.info("Start the http rest server at port {}", serverConfig.getPort());
                 }
+            } catch (SofaRpcRuntimeException e) {
+                throw e;
             } catch (Exception e) {
-                throw new SofaRpcRuntimeException(
-                    "Failed to start jetty server at port " + serverConfig.getPort() + ", cause: " + e.getMessage(), e);
+                throw new SofaRpcRuntimeException(LogCodes.getLog(LogCodes.ERROR_START_SERVER_WITH_PORT, "rest",
+                    serverConfig.getPort()), e);
             }
             started = true;
         }
@@ -171,7 +194,7 @@ public class RestServer implements Server {
             }
             httpServer.stop();
         } catch (Exception e) {
-            LOGGER.error("Stop the http rest server at port " + serverConfig.getPort() + " error !", e);
+            LOGGER.error(LogCodes.getLog(LogCodes.ERROR_STOP_SERVER_WITH_PORT, serverConfig.getPort()), e);
         }
         started = false;
     }
@@ -186,13 +209,19 @@ public class RestServer implements Server {
             LOGGER.info("Register jaxrs service to base url http://" + serverConfig.getHost() + ":"
                 + serverConfig.getPort() + serverConfig.getContextPath());
         }
+        Object obj = null;
         try {
+            obj = ProxyFactory.buildProxy(providerConfig.getProxy(), providerConfig.getProxyClass(), instance);
             httpServer.getDeployment().getRegistry()
-                .addResourceFactory(new SofaResourceFactory(providerConfig), serverConfig.getContextPath());
+                .addResourceFactory(new SofaResourceFactory(providerConfig, obj), serverConfig.getContextPath());
 
             invokerCnt.incrementAndGet();
+        } catch (SofaRpcRuntimeException e) {
+            LOGGER.error(LogCodes.getLog(LogCodes.ERROR_REGISTER_PROCESSOR_TO_SERVER, "restServer"), e);
+            throw e;
         } catch (Exception e) {
-            LOGGER.error("Register jaxrs service error", e);
+            throw new SofaRpcRuntimeException(
+                LogCodes.getLog(LogCodes.ERROR_REGISTER_PROCESSOR_TO_SERVER, "restServer"), e);
         }
     }
 
@@ -210,7 +239,7 @@ public class RestServer implements Server {
                 .removeRegistrations(providerConfig.getRef().getClass(), serverConfig.getContextPath());
             invokerCnt.decrementAndGet();
         } catch (Exception e) {
-            LOGGER.error("Unregister jaxrs service error", e);
+            LOGGER.error(LogCodes.getLog(LogCodes.ERROR_UNREG_PROCESSOR, "jaxrs"), e);
         }
         // 如果最后一个需要关闭，则关闭
         if (closeIfNoEntry && invokerCnt.get() == 0) {

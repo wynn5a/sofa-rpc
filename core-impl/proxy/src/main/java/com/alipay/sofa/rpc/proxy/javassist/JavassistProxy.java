@@ -26,6 +26,7 @@ import com.alipay.sofa.rpc.core.request.SofaRequest;
 import com.alipay.sofa.rpc.core.response.SofaResponse;
 import com.alipay.sofa.rpc.ext.Extension;
 import com.alipay.sofa.rpc.invoke.Invoker;
+import com.alipay.sofa.rpc.log.LogCodes;
 import com.alipay.sofa.rpc.log.Logger;
 import com.alipay.sofa.rpc.log.LoggerFactory;
 import com.alipay.sofa.rpc.message.MessageBuilder;
@@ -127,7 +128,7 @@ public class JavassistProxy implements Proxy {
                 LOGGER.debug("javassist proxy of interface: {} \r\n{}", interfaceClass,
                     debug != null ? debug.toString() : "");
             }
-            throw new SofaRpcRuntimeException("", e);
+            throw new SofaRpcRuntimeException(LogCodes.getLog(LogCodes.ERROR_PROXY_CONSTRUCT, "javassist"), e);
         }
     }
 
@@ -272,17 +273,12 @@ public class JavassistProxy implements Proxy {
      * @return proxy invoker
      */
     public static Invoker parseInvoker(Object proxyObject) {
-        Field field;
         try {
-            field = proxyObject.getClass().getField("proxyInvoker");
-            if (field != null) {
-                if (!field.isAccessible()) {
-                    field.setAccessible(true);
-                }
-                return (Invoker) field.get(proxyObject);
-            } else {
-                return null;
+            Field field = proxyObject.getClass().getField("proxyInvoker");
+            if (!field.isAccessible()) {
+                field.setAccessible(true);
             }
+            return (Invoker) field.get(proxyObject);
         } catch (Exception e) {
             return null;
         }

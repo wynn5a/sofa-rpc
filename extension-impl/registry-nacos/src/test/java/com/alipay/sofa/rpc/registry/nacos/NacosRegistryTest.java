@@ -26,9 +26,9 @@ import com.alipay.sofa.rpc.config.ServerConfig;
 import com.alipay.sofa.rpc.listener.ProviderInfoListener;
 import com.alipay.sofa.rpc.registry.RegistryFactory;
 import com.alipay.sofa.rpc.registry.nacos.base.BaseNacosTest;
-import org.junit.AfterClass;
+import org.junit.After;
 import org.junit.Assert;
-import org.junit.BeforeClass;
+import org.junit.Before;
 import org.junit.Test;
 
 import java.util.ArrayList;
@@ -41,23 +41,26 @@ import java.util.concurrent.TimeUnit;
 
 /**
  * The type Nacos registry test.
+ *
  * @author <a href=mailto:jervyshi@gmail.com>JervyShi</a>
  */
 public class NacosRegistryTest extends BaseNacosTest {
 
     private static RegistryConfig registryConfig;
 
-    private static NacosRegistry  registry;
+    private NacosRegistry         registry;
+
+    private ServerConfig          serverConfig;
 
     /**
      * Sets up.
      */
-    @BeforeClass
-    public static void setUp() {
+    @Before
+    public void setUp() {
         registryConfig = new RegistryConfig()
             .setProtocol("nacos")
             .setSubscribe(true)
-            .setAddress("127.0.0.1:8848")
+            .setAddress("127.0.0.1:" + nacosProcess.getServerPort())
             .setRegister(true);
 
         registry = (NacosRegistry) RegistryFactory.getRegistry(registryConfig);
@@ -68,10 +71,11 @@ public class NacosRegistryTest extends BaseNacosTest {
     /**
      * Tear down.
      */
-    @AfterClass
-    public static void tearDown() {
+    @After
+    public void tearDown() {
         registry.destroy();
         registry = null;
+        serverConfig.destroy();
     }
 
     /**
@@ -82,15 +86,15 @@ public class NacosRegistryTest extends BaseNacosTest {
     @Test
     public void testProviderObserver() throws Exception {
 
-        int timeoutPerSub = 1000;
+        int timeoutPerSub = 2000;
 
-        ServerConfig serverConfig = new ServerConfig()
+        serverConfig = new ServerConfig()
             .setProtocol("bolt")
             .setHost("0.0.0.0")
             .setPort(12200);
 
         ProviderConfig<?> provider = new ProviderConfig();
-        provider.setInterfaceId("com.alipay.xxx.TestService")
+        provider.setInterfaceId("com.alipay.xxx.NacosTestService")
             .setApplication(new ApplicationConfig().setAppName("test-server"))
             .setUniqueId("nacos-test")
             .setProxy("javassist")
@@ -106,7 +110,7 @@ public class NacosRegistryTest extends BaseNacosTest {
         Thread.sleep(1000);
 
         ConsumerConfig<?> consumer = new ConsumerConfig();
-        consumer.setInterfaceId("com.alipay.xxx.TestService")
+        consumer.setInterfaceId("com.alipay.xxx.NacosTestService")
             .setApplication(new ApplicationConfig().setAppName("test-server"))
             .setUniqueId("nacos-test")
             .setProxy("javassist")
@@ -128,7 +132,7 @@ public class NacosRegistryTest extends BaseNacosTest {
 
         // 订阅 错误的uniqueId
         ConsumerConfig<?> consumerNoUniqueId = new ConsumerConfig();
-        consumerNoUniqueId.setInterfaceId("com.alipay.xxx.TestService")
+        consumerNoUniqueId.setInterfaceId("com.alipay.xxx.NacosTestService")
             .setApplication(new ApplicationConfig().setAppName("test-server"))
             .setProxy("javassist")
             .setSubscribe(true)
@@ -165,7 +169,7 @@ public class NacosRegistryTest extends BaseNacosTest {
 
         // 重复订阅
         ConsumerConfig<?> consumer2 = new ConsumerConfig();
-        consumer2.setInterfaceId("com.alipay.xxx.TestService")
+        consumer2.setInterfaceId("com.alipay.xxx.NacosTestService")
             .setUniqueId("nacos-test")
             .setApplication(new ApplicationConfig().setAppName("test-server"))
             .setProxy("javassist")
@@ -227,7 +231,6 @@ public class NacosRegistryTest extends BaseNacosTest {
             }
             if (countDownLatch != null) {
                 countDownLatch.countDown();
-                countDownLatch = null;
             }
         }
 
@@ -238,7 +241,6 @@ public class NacosRegistryTest extends BaseNacosTest {
             }
             if (countDownLatch != null) {
                 countDownLatch.countDown();
-                countDownLatch = null;
             }
         }
 
@@ -250,7 +252,6 @@ public class NacosRegistryTest extends BaseNacosTest {
             }
             if (countDownLatch != null) {
                 countDownLatch.countDown();
-                countDownLatch = null;
             }
         }
 
@@ -264,7 +265,6 @@ public class NacosRegistryTest extends BaseNacosTest {
             }
             if (countDownLatch != null) {
                 countDownLatch.countDown();
-                countDownLatch = null;
             }
         }
 

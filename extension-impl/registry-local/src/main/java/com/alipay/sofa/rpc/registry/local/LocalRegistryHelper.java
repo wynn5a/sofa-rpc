@@ -32,6 +32,7 @@ import com.alipay.sofa.rpc.config.ProviderConfig;
 import com.alipay.sofa.rpc.config.ServerConfig;
 import com.alipay.sofa.rpc.context.RpcRuntimeContext;
 import com.alipay.sofa.rpc.core.exception.SofaRpcRuntimeException;
+import com.alipay.sofa.rpc.log.LogCodes;
 import com.alipay.sofa.rpc.log.Logger;
 import com.alipay.sofa.rpc.log.LoggerFactory;
 
@@ -72,7 +73,7 @@ public class LocalRegistryHelper {
     public static boolean checkModified(String address, String lastDigest) {
         // 检查文件是否被修改了
         String newDigest = calMD5Checksum(address);
-        return StringUtils.equals(newDigest, lastDigest);
+        return !StringUtils.equals(newDigest, lastDigest);
     }
 
     /**
@@ -88,7 +89,8 @@ public class LocalRegistryHelper {
             .setWeight(config.getWeight())
             .setSerializationType(config.getSerialization())
             .setProtocolType(server.getProtocol())
-            .setPath(server.getContextPath());
+            .setPath(server.getContextPath())
+            .setStaticAttrs(config.getParameters());
         String host = server.getHost();
         if (NetUtils.isLocalHost(host) || NetUtils.isAnyHost(host)) {
             host = SystemInfo.getLocalHost();
@@ -118,7 +120,8 @@ public class LocalRegistryHelper {
                     memoryCache.putAll(tmp);
                 }
             } catch (IOException e) {
-                throw new SofaRpcRuntimeException("Error when read backup file: " + regFile.getAbsolutePath(), e);
+                throw new SofaRpcRuntimeException(LogCodes.getLog(LogCodes.ERROR_READ_BACKUP_FILE,
+                    regFile.getAbsolutePath()), e);
             }
         }
         return memoryCache;
